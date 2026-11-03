@@ -165,9 +165,9 @@ sigma_nested_logit = coefficients_nested_logit['lg_cond_share']
 
 np.random.seed(5)
 
-market_ids = df_ols['market_ids'].unique() # Each unique market id
-markets, draws, char = len(market_ids), 500, 3
-nu_draws = np.random.randn(markets, draws, char) # 75 markets, 500 draws, 3 characteristics
+# market_ids = df_ols['market_ids'].unique() # Each unique market id
+# markets, draws, char = len(market_ids), 500, 3
+# nu_draws = np.random.randn(markets, draws, char) # 75 markets, 500 draws, 3 characteristics
 
 # def gmm(sigma): 
 # ## Program to get Simulated Shares
@@ -408,7 +408,7 @@ t0 = time.time()
 print(objective([1, 1, 1]), time.time() - t0, "seconds")
 
 result = minimize(objective, x0=np.array([1, 1, 1]), method='Nelder-Mead',
-                  options={'xatol': 1e-4, 'fatol': 1e-8, 'maxiter': 200})
+                  options={'xatol': 1e-4, 'fatol': 1e-12, 'maxiter': 200})
 
 gmm(result.x)                                        # leaves the 2SLS result in last['iv']
 print("sigma (abs):", np.abs(result.x))
@@ -416,17 +416,17 @@ print("Q:", result.fun)
 print(last['iv'].params)                             # intercept, HMO, Satisfaction, Network, prices
 print(last['iv'].summary)
 
-for start in [[0.1, 0.1, 0.1], [0.5, 0.5, 0.5], [0.7, 1.0, 0.3], [0.5, 0.3, 1.0]]:
+# for start in [[0.1, 0.1, 0.1], [0.5, 0.5, 0.5], [0.7, 1.0, 0.3], [0.5, 0.3, 1.0]]:
 
-    result = minimize(objective, x0=np.array(start), method='Nelder-Mead',
-                  options={'xatol': 1e-4, 'fatol': 1e-8, 'maxiter': 200})
+#     result = minimize(objective, x0=np.array(start), method='Nelder-Mead',
+#                   options={'xatol': 1e-4, 'fatol': 1e-8, 'maxiter': 200})
 
-    # ---------- CHANGED (B): recover all parameters at the optimum ----------
-    gmm(result.x)                                        # leaves the 2SLS result in last['iv']
-    print("sigma (abs):", np.abs(result.x))
-    print("Q:", result.fun)
-    print(last['iv'].params)                             # intercept, HMO, Satisfaction, Network, prices
-    print(last['iv'].summary)
+#     # ---------- CHANGED (B): recover all parameters at the optimum ----------
+#     gmm(result.x)                                        # leaves the 2SLS result in last['iv']
+#     print("sigma (abs):", np.abs(result.x))
+#     print("Q:", result.fun)
+#     print(last['iv'].params)                             # intercept, HMO, Satisfaction, Network, prices
+#     print(last['iv'].summary)
 
 ## BLP Coefficients
 coefficients_blp = last['iv'].params
@@ -436,4 +436,21 @@ Network_blp = coefficients_blp['Network']
 Satisfaction_blp = coefficients_blp['Satisfaction']
 sigma_blp = np.abs(result.x)
 
+
+#####################################################################################################
+
+# Own Price Elasticty
+
+# Logit 
+own_elasticity = price_logit * df['prices'] * (1 - df['shares'])
+logit_mean_elasticity = own_elasticity.mean()
+logit_markup = np.abs(1/logit_mean_elasticity)
+
+# Nested Logit
+own_elasticity = price_nested_logit* df['prices'] * ( 1/(1 - sigma_nested_logit) - (sigma_nested_logit / (1 - sigma_nested_logit))* df['cond_share'] - df['shares'])
+nested_logit_mean_elasticity = own_elasticity.mean()
+nested_logit_markup = np.abs(1/nested_logit_mean_elasticity)
+
+
+# BLP
 

@@ -15,6 +15,7 @@ import random
 import pyblp
 from statsmodels.sandbox.regression.gmm import IV2SLS
 from statsmodels.iolib.summary2 import summary_col
+import optimagic as om
 
 MAIN = Path(__file__).resolve().parents[1]
 
@@ -391,7 +392,7 @@ def candidate_gmm_obj(Z, X, delta):
     g = (Z.T @ xi) / len(df1)
     obj = g.T @ W @ g
 
-    return obj, xi, g
+    return obj
 
 def objective(sigma_init): 
     sigma = np.diag(sigma_init)
@@ -417,6 +418,10 @@ delta_hat = contraction_mapping(
     sigma_hat,
     X_id,
     nu
+)
+
+pd.DataFrame({"delta_hat": delta_hat}).to_csv(
+    OUTPUT / "delta_hat.csv", index=False
 )
 
 W = np.linalg.inv((Z_np.T @ Z_np) / len(df1))
@@ -532,5 +537,53 @@ blp_params = pd.read_csv(
     OUTPUT / "params_blp.csv", header=0, names=['params', 'estimates']
 )
 
-def param_shares(alpha, beta, sigma):
-    delta_jm = beta @ 
+blp_alpha = blp_params.loc[
+    blp_params["params"] == "alpha_blp", "estimates"
+].to_numpy()
+
+delta_hat = pd.read_csv(
+    OUTPUT / "delta_hat.csv"
+)["delta_hat"].to_numpy()
+
+blp_sigma_hmo = blp_params.loc[
+    blp_params["params"] == "sigma_hmo_blp", "estimates"
+].to_numpy()
+
+blp_sigma_satisfaction = blp_params.loc[
+    blp_params["params"] == "sigma_satisfaction_blp", "estimates"
+].to_numpy()
+
+blp_sigma_network = blp_params.loc[
+    blp_params["params"] == "sigma_network_blp", "estimates"
+].to_numpy()
+
+sigma_hat = np.diag([
+    blp_sigma_hmo.item(),
+    blp_sigma_satisfaction.item(),
+    blp_sigma_network.item()
+])
+
+def share_grad(delta, eps):
+    grad = np.zeros(len(delta))
+
+    for j in range(len(delta)):
+        delta_plus = delta.copy()
+        delta_minus = delta.copy()
+
+        delta_plus[j] -= blp_alpha * eps
+        delta_minus[j] += blp_alpha * eps
+
+        shares_plus = calc_shares(delta_plus, sigma_hat, X_id, nu)
+        shares_mins = calc_shares(delta_minus, sigma_hat, X_id, nu)
+
+        grad[j] = (shares_plus[j] - shares_mins[j]) / (2 * eps)
+
+    return grad
+
+shares_gradient = share_grad(delta_hat, eps=1e-6)
+
+blp_elast = np.mean(shares_gradient * (P / df1["shares"]))
+
+blp_markup = 1 / np.abs(blp_elast)
+
+

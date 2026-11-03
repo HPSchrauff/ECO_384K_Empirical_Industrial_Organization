@@ -391,7 +391,7 @@ def candidate_gmm_obj(Z, X, delta):
     g = (Z.T @ xi) / len(df1)
     obj = g.T @ W @ g
 
-    return obj
+    return obj, xi, g
 
 def objective(sigma_init): 
     sigma = np.diag(sigma_init)
@@ -418,6 +418,7 @@ delta_hat = contraction_mapping(
     X_id,
     nu
 )
+
 W = np.linalg.inv((Z_np.T @ Z_np) / len(df1))
 
 beta_hat = (
@@ -456,3 +457,80 @@ params_blp.to_csv(
     OUTPUT / "params_blp.csv",
     header=["estimate"]
 )
+
+######################################
+# Logit mean own price elasticity #
+######################################
+
+# The own-price elasticity is given by -alpha * p_jt * (1 - s_jt)
+logit_params = pd.read_csv(
+    OUTPUT / "params_logit.csv", header=0, names=['params', 'estimates']
+)
+
+logit_alpha = -logit_params.loc[
+    logit_params["params"] == "alpha_logit", "estimates"
+].to_numpy()
+
+logit_elast = (
+    -logit_alpha 
+    * P 
+    * (1 - df1["shares"]))
+
+mean_logit_elast = np.mean(
+    logit_elast, 
+    axis=0
+)
+
+######################################
+# Logit markup #
+######################################
+
+#logit_markup = np.mean(
+#    1 / (logit_alpha * P * (1 - df1["shares"]))
+#)
+
+logit_markup = 1 / mean_logit_elast
+
+######################################
+# Nested logit mean own price elasticity #
+######################################
+
+nested_logit_params = pd.read_csv(
+    OUTPUT / "params_nested_logit.csv", header=0, names=['params', 'estimates']
+)
+
+nested_logit_alpha = -nested_logit_params.loc[
+    nested_logit_params["params"] == "alpha_nested_logit", "estimates"
+].to_numpy()
+
+nested_logit_rho = nested_logit_params.loc[
+    nested_logit_params["params"] == "rho_nested_logit", "estimates"
+].to_numpy()
+
+nested_logit_elast = (
+    - nested_logit_alpha * P * (
+        1 / (1 - nested_logit_rho) 
+        - (nested_logit_rho / (1 - nested_logit_rho))
+        * df1['within_hmo_share']
+        - df1['shares']
+    )
+)
+
+mean_nested_logit_elast = np.mean(nested_logit_elast)
+
+######################################
+# Nested logit markup #
+######################################
+
+nested_logit_markup = 1 / mean_nested_logit_elast
+
+######################################
+# BLP mean own price elasticity #
+######################################
+
+blp_params = pd.read_csv(
+    OUTPUT / "params_blp.csv", header=0, names=['params', 'estimates']
+)
+
+def param_shares(alpha, beta, sigma):
+    delta_jm = beta @ 

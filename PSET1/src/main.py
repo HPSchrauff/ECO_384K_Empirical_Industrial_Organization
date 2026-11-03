@@ -16,6 +16,7 @@ import pyblp
 from statsmodels.sandbox.regression.gmm import IV2SLS
 from statsmodels.iolib.summary2 import summary_col
 import optimagic as om
+import openpyxl
 
 MAIN = Path(__file__).resolve().parents[1]
 
@@ -407,7 +408,13 @@ def objective(sigma_init):
     return candidate_gmm_obj(Z, X, delta_hat)
 
 
-gmm = minimize(fun=objective, x0=np.array([1, 1, 1]), bounds=((0, None), (0, None), (0, None)))
+gmm = om.minimize(
+    fun=objective,
+    x0=np.array([1.0, 1.0, 1.0]),
+    algorithm="scipy_lbfgsb",
+    bounds=om.Bounds(lower=np.zeros(3)),
+    multistart=True,
+)
 
 # This gives us the random coefficient sigma parameters. We can now recover the parameters on price and product characteristics
 sigma_hat = np.diag(gmm.x)
@@ -583,7 +590,10 @@ def share_grad(delta, eps):
 shares_gradient = share_grad(delta_hat, eps=1e-6)
 
 blp_elast = np.mean(shares_gradient * (P / df1["shares"]))
-
 blp_markup = 1 / np.abs(blp_elast)
+
+print(blp_elast)
+print(blp_markup)
+
 
 

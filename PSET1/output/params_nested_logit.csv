@@ -1,0 +1,7 @@
+,estimate
+alpha_nested_logit,1.939221910805882
+beta_const_nested_logit,0.598136500088792
+beta_hmo_nested_logit,-0.6007702929728316
+beta_satisfaction_nested_logit,2.4415055908484677
+beta_network_nested_logit,2.388047139677044
+rho_nested_logit,0.14884369223045635

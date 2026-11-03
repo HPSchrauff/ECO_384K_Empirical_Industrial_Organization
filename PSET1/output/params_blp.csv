@@ -1,0 +1,9 @@
+,estimate
+alpha_blp,2.391923250654412
+beta_const_blp,1.3691509301680371
+beta_hmo_blp,-0.7309177357898774
+beta_satisfaction_blp,2.9092471280085106
+beta_network_blp,2.8648910962414362
+sigma_hmo_blp,0.7253219807132214
+sigma_satisfaction_blp,1.3264301421539426
+sigma_network_blp,1.580271337286532

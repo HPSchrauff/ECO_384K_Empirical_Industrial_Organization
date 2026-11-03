@@ -1,0 +1,6 @@
+,estimate
+alpha_logit,2.19585654774459
+beta_const_logit,0.5228107788971708
+beta_hmo_logit,-0.6501529905482358
+beta_satisfaction_logit,2.724750028814196
+beta_network_logit,2.6935134185576013

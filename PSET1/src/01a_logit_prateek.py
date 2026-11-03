@@ -2,6 +2,8 @@
 #### MODULES AND PATHS ####
 ######################################
 
+
+
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
@@ -13,15 +15,8 @@ from math import pi
 from math import log
 import random
 import pyblp
+import time
 from linearmodels.iv import IV2SLS
-
-MAIN = Path(__file__).resolve().parents[1]
-
-DATA = MAIN / "data"
-CODE = MAIN / "src"
-
-for directory in (DATA, CODE):
-    directory.mkdir(parents=True, exist_ok=True)
 
 %cd '/Users/prateekmittal/Library/CloudStorage/OneDrive-TheUniversityofTexasatAustin/IO HW/HW 1'
 
@@ -114,6 +109,12 @@ print(sls_ols.summary())
 iv2sls = IV2SLS.from_formula('ShareDiff ~ 1 + HMO + Satisfaction + Network + [prices ~ hausman_instrument]', data =df).fit(cov_type='robust')
 print(iv2sls.summary)
 
+## Coefficients
+coefficients_logit = iv2sls.params
+price_logit = coefficients_logit['prices']
+HMO_logit = coefficients_logit['HMO']
+Satisfaction_logit = coefficients_logit['Satisfaction']
+Network_logit = coefficients_logit['Network']
 
 
 # Nested Logit
@@ -151,16 +152,288 @@ iv2sls = IV2SLS.from_formula(
 ).fit(cov_type='robust')
 print(iv2sls.summary)
 
+# Coefficients
+coefficients_nested_logit = iv2sls.params
+price_nested_logit = coefficients_nested_logit['prices']
+HMO_nested_logit = coefficients_nested_logit['HMO']
+Satisfaction_nested_logit = coefficients_nested_logit['Satisfaction']
+Network_nested_logit = coefficients_nested_logit['Network']
+sigma_nested_logit = coefficients_nested_logit['lg_cond_share']
 
 
 ## BLP
 
-np.random.seed(495794)
+np.random.seed(5)
 
-#rng = np.random.default_rng()
-n_markets = df['market_ids'].nunique()
-k = 3 #3 product characteristic
-s = 500 #no. of indv per market
-nu = np.random.randn(n_markets, s, k)
+market_ids = df_ols['market_ids'].unique() # Each unique market id
+markets, draws, char = len(market_ids), 500, 3
+nu_draws = np.random.randn(markets, draws, char) # 75 markets, 500 draws, 3 characteristics
+
+# def gmm(sigma): 
+# ## Program to get Simulated Shares
+
+#     def sim_shares(sigma, delta):
+#         s_hat = []
+#         start = 0
+#         # idx goes from 0-74 and t goes from 1-75 (Actual market ids) 
+#         for idx, i in enumerate(market_ids):
+#             # For market i, get the product characterstics
+#             x = df_ols.loc[df_ols['market_ids'] == i, ['HMO', 'Satisfaction', 'Network']].to_numpy()
+#             J = x.shape[0] # No of products in each market
+
+#             # Mu for each consumer across each product in market i
+#             mu = x @ (sigma[:, None] * nu_draws[idx].T)
+
+#             # Delta
+#             d = delta[start: start + J] # Uses number of products in each market to get the initial value of delta
+#             start += J # Start at next market in next loop
+
+#             # Simulates shares
+#             util = d[:, None] + mu
+#             num = np.exp(util)
+#             denom = 1 + num.sum(axis = 0, keepdims = True)
+
+#             prob = num/denom
+#             s_hat.append(prob.mean(axis = 1))
+
+#         return np.concatenate(s_hat)
+
+#     # delta0 = df_ols['ShareDiff'].to_numpy()
+#     # sigma = np.array([3, 3, 3])
+#     # sim_share = sim_shares(sigma, delta0)
+
+#     ## Contraction Mapping
+
+#     def contraction(sigma, delta, tol = 1e-12, maxit = 1000):
+#         # S_obs = df_ols['shares'].to_numpy()
+#         for i in range(maxit):
+#             delta_new = delta + np.log(S_obs) - np.log(sim_shares(sigma, delta))
+#             if np.max(np.abs(delta_new - delta)) < tol:
+#                     return delta_new
+#             delta = delta_new
+#         print("Warning: Did not converge")
+#         return delta
+
+#     # delt = contraction(sigma, delta0)
+
+
+#     ## Now use IV to get \psi as residual
+
+#     # ## First Stage
+
+#     # y = df_ols['prices']
+#     # x = df_ols[['hausman_instrument', 'HMO_instrument', 'Satisfaction_instrument', 'Network_instrument',
+#     #         'HMO', 'Satisfaction', 'Network']]
+
+#     # X = sm.add_constant(x)
+
+#     # frt_stage = sm.OLS(y, X).fit(cov_type = 'HC1')
+#     # print(frt_stage.summary())
+
+
+#     # exog = ['HMO', 'Satisfaction', 'Network']
+#     # excl = ['hausman_instrument', 'HMO_instrument', 'Satisfaction_instrument', 'Network_instrument']
+#     # d = sm.OLS(df_ols['ShareDiff'], sm.add_constant(df_ols[exog + excl[1:]])).fit(cov_type='HC1')
+#     # print(d.summary())
+
+#     # ## Bad Instruments 
+
+#     ## Create Gandhi Houde Instruments 
+
+#     def gh_instruments(var):
+#         quad = []
+
+#         for t in df_ols['market_ids'].unique():
+#             x = df_ols[df_ols['market_ids'] == t][var].to_numpy()
+#             for j in range(len(x)):
+#                 total = 0
+#                 for k in range(len(x)):
+#                     if k != j:
+#                             total = total + (x[k] - x[j])**2
+#                 quad.append(total)       
+#         return quad
+
+#     df_ols['Network_quad'] = gh_instruments('Network')
+#     df_ols['Satisfaction_quad'] = gh_instruments('Satisfaction')      
+
+
+#     # y = df['prices']
+#     # x = df[['hausman_instrument', 'HMO_instrument', 'Satisfaction_quad', 'Network_quad',
+#     #         'HMO', 'Satisfaction', 'Network']]
+
+#     # X = sm.add_constant(x)
+
+#     # frt_stage = sm.OLS(y, X).fit(cov_type = 'HC1')
+#     # print(frt_stage.summary())
+
+
+#     # exog = ['HMO', 'Satisfaction', 'Network']
+#     # excl = ['hausman_instrument', 'HMO_instrument', 'Satisfaction_quad', 'Network_quad']
+#     # d = sm.OLS(df_ols['ShareDiff'], sm.add_constant(df_ols[exog + excl[1:]])).fit(cov_type='HC1')
+#     # print(d.summary())
+
+#     # Delta = alpha * price + beta * observed_characterstics + \psi
+
+#     df_ols['delta_calc'] = contraction(sigma, delta0)
+
+#     iv2sls = IV2SLS.from_formula('delta_calc ~ 1 + HMO + Satisfaction + Network + [prices ~ hausman_instrument + ' \
+#     'HMO_instrument + Satisfaction_quad + Network_quad]', data =df_ols).fit(cov_type='robust')
+#     # print(iv2sls.summary)
+
+#     ## Ksi term
+#     xi = iv2sls.resids.to_numpy()
+
+#     ## GMM 
+#     df_ols['const'] = 1.0
+#     z = ['const', 'HMO', 'Satisfaction', 'Network', 'hausman_instrument', 'HMO_instrument', 'Satisfaction_quad', 'Network_quad']
+
+#     Z = df_ols[z].to_numpy()
+#     N = len(xi)
+
+#     g = Z.T @ xi / N
+#     W = np.linalg.inv(Z.T @ Z / N)
+
+#     return g @ W @ g
+
+# def objective(free_sigma):
+#     # free_sigma has 2 entries: [sigma_Satisfaction, sigma_Network]
+#     sigma = np.array([free_sigma[0], free_sigma[1], free_sigma[2]])   # HMO fixed at 0
+#     return gmm(sigma)
+
+# result = minimize(objective, x0=np.array([0.5, 0.5, 0.5]), method='Nelder-Mead',
+#                   options={'xatol': 1e-4, 'fatol': 1e-8, 'maxiter': 200})
+
+# print(result.x)     # estimated sigmas
+# print(result.fun)   # objective value at the optimum
+# print(result.success, result.message)
+
+# for start in [[0.1, 0.1], [0.5, 0.5], [1.0, 0.3], [0.3, 1.0]]:
+#     r = minimize(objective, x0=np.array(start), method='Nelder-Mead')
+#     print(start, '->', np.abs(r.x).round(3), round(r.fun, 6))
+
+
+market_ids = df_ols['market_ids'].unique() # Each unique market id
+markets, draws, char = len(market_ids), 500, 3
+nu_draws = np.random.randn(markets, draws, char) # 75 markets, 500 draws, 3 characteristics
+
+
+S_obs = df_ols['shares'].to_numpy() # Observed Shares
+delta0 = df_ols['ShareDiff'].to_numpy() # Intial Shares (Delta_Int)
+
+## Create Gandhi Houde Instruments 
+def gh_instruments(var):
+    quad = []
+
+    for t in df_ols['market_ids'].unique():
+        x = df_ols[df_ols['market_ids'] == t][var].to_numpy()
+        for j in range(len(x)):
+            total = 0
+            for k in range(len(x)):
+                if k != j:
+                        total = total + (x[k] - x[j])**2
+            quad.append(total)       
+    return quad
+
+df_ols['Network_quad'] = gh_instruments('Network')
+df_ols['Satisfaction_quad'] = gh_instruments('Satisfaction')     
+df_ols['const'] = 1.0
+
+## GMM Estiimation Elements
+z = ['const', 'HMO', 'Satisfaction', 'Network', 'hausman_instrument', 'HMO_instrument', 'Satisfaction_quad', 'Network_quad']
+Z = df_ols[z].to_numpy()
+N = len(df_ols)
+W = np.linalg.inv(Z.T @ Z / N)
+
+x_list = [df_ols.loc[df_ols['market_ids'] == i, ['HMO', 'Satisfaction', 'Network']].to_numpy()
+          for i in market_ids]  
+
+def sim_shares(sigma, delta):
+    s_hat = []
+    start = 0
+    # idx goes from 0-74 and t goes from 1-75 (Actual market ids) 
+    for idx, x in enumerate(x_list):
+        # For market i, get the product characterstics
+        J = x.shape[0] # No of products in each market
+
+        # Mu for each consumer across each product in market i
+        mu = x @ (sigma[:, None] * nu_draws[idx].T)
+
+        # Delta
+        d = delta[start: start + J] # Uses number of products in each market to get the initial value of delta
+        start += J # Start at next market in next loop
+
+        # Simulates shares
+        util = d[:, None] + mu
+        num = np.exp(util)
+        denom = 1 + num.sum(axis = 0, keepdims = True)
+
+        prob = num/denom
+        s_hat.append(prob.mean(axis = 1))
+
+    return np.concatenate(s_hat)
+
+# Contraction mapping
+def contraction(sigma, delta, tol = 1e-12, maxit = 1000):
+    for i in range(maxit):
+        delta_new = delta + np.log(S_obs) - np.log(sim_shares(sigma, delta))
+        if np.max(np.abs(delta_new - delta)) < tol:
+                return delta_new
+        delta = delta_new
+    print("Warning: Did not converge")
+    return delta
+
+last = {}
+
+def gmm(sigma):
+     df_ols['delta_calc'] = contraction(sigma, delta0)
+     
+     iv2sls = IV2SLS.from_formula('delta_calc ~ 1 + HMO + Satisfaction + Network + [prices ~ hausman_instrument + ' \
+    'HMO_instrument + Satisfaction_quad + Network_quad]', data =df_ols).fit(cov_type='robust')
+     
+     last['iv'] = iv2sls
+
+    # ## Ksi term
+     xi = iv2sls.resids.to_numpy()
+     
+     g = Z.T @ xi / N
+
+     return g @ W @ g
+
+
+def objective(free_sigma):
+    return gmm(np.array(free_sigma))                 # all 3 sigmas free, as in your version
+
+# First, time a single call
+t0 = time.time()
+print(objective([1, 1, 1]), time.time() - t0, "seconds")
+
+result = minimize(objective, x0=np.array([1, 1, 1]), method='Nelder-Mead',
+                  options={'xatol': 1e-4, 'fatol': 1e-8, 'maxiter': 200})
+
+gmm(result.x)                                        # leaves the 2SLS result in last['iv']
+print("sigma (abs):", np.abs(result.x))
+print("Q:", result.fun)
+print(last['iv'].params)                             # intercept, HMO, Satisfaction, Network, prices
+print(last['iv'].summary)
+
+for start in [[0.1, 0.1, 0.1], [0.5, 0.5, 0.5], [0.7, 1.0, 0.3], [0.5, 0.3, 1.0]]:
+
+    result = minimize(objective, x0=np.array(start), method='Nelder-Mead',
+                  options={'xatol': 1e-4, 'fatol': 1e-8, 'maxiter': 200})
+
+    # ---------- CHANGED (B): recover all parameters at the optimum ----------
+    gmm(result.x)                                        # leaves the 2SLS result in last['iv']
+    print("sigma (abs):", np.abs(result.x))
+    print("Q:", result.fun)
+    print(last['iv'].params)                             # intercept, HMO, Satisfaction, Network, prices
+    print(last['iv'].summary)
+
+## BLP Coefficients
+coefficients_blp = last['iv'].params
+price_blp = coefficients_blp['prices']
+HMO_blp = coefficients_blp['HMO']
+Network_blp = coefficients_blp['Network']
+Satisfaction_blp = coefficients_blp['Satisfaction']
+sigma_blp = np.abs(result.x)
 
 

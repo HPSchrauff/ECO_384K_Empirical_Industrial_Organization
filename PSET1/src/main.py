@@ -75,7 +75,10 @@ X_id = df1[['market_ids', 'HMO', 'Satisfaction', 'Network']] # market id + exoge
 ######################################
 
 # Let's first assume that prices are exogenous. Then we can use standard OLS
-naive_ols = sm.OLS(Y, X).fit()
+naive_ols = sm.OLS(
+    Y, 
+    X
+).fit()
 print(naive_ols.summary())
 
 ols_table = summary_col(
@@ -408,12 +411,10 @@ def objective(sigma_init):
     return candidate_gmm_obj(Z, X, delta_hat)
 
 
-gmm = om.minimize(
-    fun=objective,
-    x0=np.array([1.0, 1.0, 1.0]),
-    algorithm="scipy_lbfgsb",
-    bounds=om.Bounds(lower=np.zeros(3)),
-    multistart=True,
+gmm = minimize(
+    fun=objective, 
+    x0=np.array([1, 1, 1]), 
+    bounds=((0, None), (0, None), (0, None))
 )
 
 # This gives us the random coefficient sigma parameters. We can now recover the parameters on price and product characteristics
@@ -548,9 +549,9 @@ blp_alpha = blp_params.loc[
     blp_params["params"] == "alpha_blp", "estimates"
 ].to_numpy()
 
-delta_hat = pd.read_csv(
-    OUTPUT / "delta_hat.csv"
-)["delta_hat"].to_numpy()
+blp_beta_satisfaction = blp_params.loc[
+    blp_params["params"] == "beta_satisfaction_blp", "estimates"
+].to_numpy()
 
 blp_sigma_hmo = blp_params.loc[
     blp_params["params"] == "sigma_hmo_blp", "estimates"
@@ -569,6 +570,10 @@ sigma_hat = np.diag([
     blp_sigma_satisfaction.item(),
     blp_sigma_network.item()
 ])
+
+delta_hat = pd.read_csv(
+    OUTPUT / "delta_hat.csv"
+)["delta_hat"].to_numpy()
 
 def share_grad(delta, eps):
     grad = np.zeros(len(delta))
@@ -589,11 +594,34 @@ def share_grad(delta, eps):
 
 shares_gradient = share_grad(delta_hat, eps=1e-6)
 
-blp_elast = np.mean(shares_gradient * (P / df1["shares"]))
+blp_elast = shares_gradient * (P / df1["shares"])
+blp_elast_mean = np.mean(blp_elast)
+
 blp_markup = 1 / np.abs(blp_elast)
+blp_markup_mean = np.mean(blp_markup)
 
-print(blp_elast)
-print(blp_markup)
+print(blp_elast_mean)
+print(blp_markup_mean) 
 
+######################################
+# BLP MC and characteristic relation #
+######################################
 
+# Let's calculate marginal costs for products
+mc = (
+    P * (1 - (
+        1 / np.abs(blp_elast)
+    ))
+)
+log_mc = np.log(mc)
+
+mc_ols = sm.OLS(
+    log_mc, 
+    X.loc[:, X.columns != 'prices']
+).fit()
+print(mc_ols.summary())
+
+######################################
+# Government subsidy #
+######################################
 

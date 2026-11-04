@@ -165,153 +165,6 @@ sigma_nested_logit = coefficients_nested_logit['lg_cond_share']
 
 np.random.seed(5)
 
-# market_ids = df_ols['market_ids'].unique() # Each unique market id
-# markets, draws, char = len(market_ids), 500, 3
-# nu_draws = np.random.randn(markets, draws, char) # 75 markets, 500 draws, 3 characteristics
-
-# def gmm(sigma): 
-# ## Program to get Simulated Shares
-
-#     def sim_shares(sigma, delta):
-#         s_hat = []
-#         start = 0
-#         # idx goes from 0-74 and t goes from 1-75 (Actual market ids) 
-#         for idx, i in enumerate(market_ids):
-#             # For market i, get the product characterstics
-#             x = df_ols.loc[df_ols['market_ids'] == i, ['HMO', 'Satisfaction', 'Network']].to_numpy()
-#             J = x.shape[0] # No of products in each market
-
-#             # Mu for each consumer across each product in market i
-#             mu = x @ (sigma[:, None] * nu_draws[idx].T)
-
-#             # Delta
-#             d = delta[start: start + J] # Uses number of products in each market to get the initial value of delta
-#             start += J # Start at next market in next loop
-
-#             # Simulates shares
-#             util = d[:, None] + mu
-#             num = np.exp(util)
-#             denom = 1 + num.sum(axis = 0, keepdims = True)
-
-#             prob = num/denom
-#             s_hat.append(prob.mean(axis = 1))
-
-#         return np.concatenate(s_hat)
-
-#     # delta0 = df_ols['ShareDiff'].to_numpy()
-#     # sigma = np.array([3, 3, 3])
-#     # sim_share = sim_shares(sigma, delta0)
-
-#     ## Contraction Mapping
-
-#     def contraction(sigma, delta, tol = 1e-12, maxit = 1000):
-#         # S_obs = df_ols['shares'].to_numpy()
-#         for i in range(maxit):
-#             delta_new = delta + np.log(S_obs) - np.log(sim_shares(sigma, delta))
-#             if np.max(np.abs(delta_new - delta)) < tol:
-#                     return delta_new
-#             delta = delta_new
-#         print("Warning: Did not converge")
-#         return delta
-
-#     # delt = contraction(sigma, delta0)
-
-
-#     ## Now use IV to get \psi as residual
-
-#     # ## First Stage
-
-#     # y = df_ols['prices']
-#     # x = df_ols[['hausman_instrument', 'HMO_instrument', 'Satisfaction_instrument', 'Network_instrument',
-#     #         'HMO', 'Satisfaction', 'Network']]
-
-#     # X = sm.add_constant(x)
-
-#     # frt_stage = sm.OLS(y, X).fit(cov_type = 'HC1')
-#     # print(frt_stage.summary())
-
-
-#     # exog = ['HMO', 'Satisfaction', 'Network']
-#     # excl = ['hausman_instrument', 'HMO_instrument', 'Satisfaction_instrument', 'Network_instrument']
-#     # d = sm.OLS(df_ols['ShareDiff'], sm.add_constant(df_ols[exog + excl[1:]])).fit(cov_type='HC1')
-#     # print(d.summary())
-
-#     # ## Bad Instruments 
-
-#     ## Create Gandhi Houde Instruments 
-
-#     def gh_instruments(var):
-#         quad = []
-
-#         for t in df_ols['market_ids'].unique():
-#             x = df_ols[df_ols['market_ids'] == t][var].to_numpy()
-#             for j in range(len(x)):
-#                 total = 0
-#                 for k in range(len(x)):
-#                     if k != j:
-#                             total = total + (x[k] - x[j])**2
-#                 quad.append(total)       
-#         return quad
-
-#     df_ols['Network_quad'] = gh_instruments('Network')
-#     df_ols['Satisfaction_quad'] = gh_instruments('Satisfaction')      
-
-
-#     # y = df['prices']
-#     # x = df[['hausman_instrument', 'HMO_instrument', 'Satisfaction_quad', 'Network_quad',
-#     #         'HMO', 'Satisfaction', 'Network']]
-
-#     # X = sm.add_constant(x)
-
-#     # frt_stage = sm.OLS(y, X).fit(cov_type = 'HC1')
-#     # print(frt_stage.summary())
-
-
-#     # exog = ['HMO', 'Satisfaction', 'Network']
-#     # excl = ['hausman_instrument', 'HMO_instrument', 'Satisfaction_quad', 'Network_quad']
-#     # d = sm.OLS(df_ols['ShareDiff'], sm.add_constant(df_ols[exog + excl[1:]])).fit(cov_type='HC1')
-#     # print(d.summary())
-
-#     # Delta = alpha * price + beta * observed_characterstics + \psi
-
-#     df_ols['delta_calc'] = contraction(sigma, delta0)
-
-#     iv2sls = IV2SLS.from_formula('delta_calc ~ 1 + HMO + Satisfaction + Network + [prices ~ hausman_instrument + ' \
-#     'HMO_instrument + Satisfaction_quad + Network_quad]', data =df_ols).fit(cov_type='robust')
-#     # print(iv2sls.summary)
-
-#     ## Ksi term
-#     xi = iv2sls.resids.to_numpy()
-
-#     ## GMM 
-#     df_ols['const'] = 1.0
-#     z = ['const', 'HMO', 'Satisfaction', 'Network', 'hausman_instrument', 'HMO_instrument', 'Satisfaction_quad', 'Network_quad']
-
-#     Z = df_ols[z].to_numpy()
-#     N = len(xi)
-
-#     g = Z.T @ xi / N
-#     W = np.linalg.inv(Z.T @ Z / N)
-
-#     return g @ W @ g
-
-# def objective(free_sigma):
-#     # free_sigma has 2 entries: [sigma_Satisfaction, sigma_Network]
-#     sigma = np.array([free_sigma[0], free_sigma[1], free_sigma[2]])   # HMO fixed at 0
-#     return gmm(sigma)
-
-# result = minimize(objective, x0=np.array([0.5, 0.5, 0.5]), method='Nelder-Mead',
-#                   options={'xatol': 1e-4, 'fatol': 1e-8, 'maxiter': 200})
-
-# print(result.x)     # estimated sigmas
-# print(result.fun)   # objective value at the optimum
-# print(result.success, result.message)
-
-# for start in [[0.1, 0.1], [0.5, 0.5], [1.0, 0.3], [0.3, 1.0]]:
-#     r = minimize(objective, x0=np.array(start), method='Nelder-Mead')
-#     print(start, '->', np.abs(r.x).round(3), round(r.fun, 6))
-
-
 market_ids = df_ols['market_ids'].unique() # Each unique market id
 markets, draws, char = len(market_ids), 500, 3
 nu_draws = np.random.randn(markets, draws, char) # 75 markets, 500 draws, 3 characteristics
@@ -439,7 +292,7 @@ sigma_blp = np.abs(result.x)
 
 #####################################################################################################
 
-# Own Price Elasticty
+# Own Price Elasticty and Markup
 
 # Logit 
 own_elasticity = price_logit * df['prices'] * (1 - df['shares'])
@@ -453,4 +306,28 @@ nested_logit_markup = np.abs(1/nested_logit_mean_elasticity)
 
 
 # BLP
+price = df_ols['prices'].to_numpy()
+eps = 0.001
 
+own_els = np.zeros(len(df_ols))
+delta_hat = contraction(sigma_blp, delta0)
+s_old = sim_shares(sigma_blp, delta_hat)
+
+
+for j in range(len(df_ols)):
+     delta_new = delta_hat.copy()
+     delta_new[j] = delta_new[j] + price_blp * eps * price[j]
+     s_new = sim_shares(sigma_blp, delta_new)
+     own_els[j] = ((s_new[j] - s_old[j])/ s_old[j]) / eps
+
+
+print(own_els.mean())
+blp_markup = np.abs(1/own_els.mean())
+
+
+#####################################################################################################
+
+## Plan Characteristics and MC
+
+# BLP MC
+mc = price * (1 - blp_markup)

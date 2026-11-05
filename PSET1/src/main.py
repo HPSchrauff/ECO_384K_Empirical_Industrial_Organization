@@ -17,6 +17,7 @@ from statsmodels.sandbox.regression.gmm import IV2SLS
 from statsmodels.iolib.summary2 import summary_col
 import optimagic as om
 import openpyxl
+from scipy.linalg import hadamard
 
 MAIN = Path(__file__).resolve().parents[1]
 
@@ -647,9 +648,53 @@ def share_jac(alpha, eps):
 
     return jacobian
 
-share_price_jac = share_jac(alpha=blp_alpha, eps=1e-6)
+share_price_jac = (share_jac(alpha=blp_alpha, eps=1e-6))
+share_price_jac_np = np.array(
+    list(share_price_jac.values()),
+    dtype=object
+)
 
-blp_elast = share_price_jacs * (P / df1["shares"])
+def get_elast():
+
+    own_elast = []
+
+    for i, m in enumerate(df1["market_ids"].unique()):
+        own_elast_m = np.diag(np.diag(share_price_jac_np[i])) @ (df1.loc[df1['market_ids'] == m, 'prices'].to_numpy() / (df1.loc[df1['market_ids'] == m, 'shares'].to_numpy()))
+
+        own_elast.append(own_elast_m) 
+
+    return own_elast
+
+np.mean(own_elast)
+
+a = np.diag(np.diag(share_price_jac_np[0]))
+df1_market1 = df1.loc[df1["market_ids"] == 1, "prices"].to_numpy() + np.linalg.inv(a @ ) @ df1.loc[df1["market_ids"] == 1, "shares"].to_numpy()
+#array([1.62157622, 2.01180687, 1.59631415, 1.86083763])
+
+delta_p1 = np.multiply(-np.eye(len(np.unique(df1.loc[df1["market_ids"] == 1, "product_ids"]))), share_price_jac_np[0])
+c1 = df1.loc[df1["market_ids"] == 1, "prices"].to_numpy() - np.linalg.inv(delta_p1) @ df1.loc[df1["market_ids"] == 1, "shares"].to_numpy()
+
+def get_mc(ownership_matrix):
+
+    mc = []
+    delta_p = []
+
+    # We compute elasticities within each market
+    for m in enumerate(df1['market_ids'].unique()):
+
+        ownership_matrix_m = ownership_matrix[m - 1]
+        share_price_jac_m = share_price_jac_np[m - 1]
+        delta_pm = - ownership_matrix @ share_price_jac_m
+
+
+
+
+
+
+
+# Now, we have the Jacobian of shares wrt prices for each market. We continue to implicitly assume that each plan corresponds to a unique firm. 
+
+mc = P - np.matmul(np.linalg.inv(share_price_jac), df1["shares"])
 blp_elast_mean = np.mean(blp_elast)
 
 blp_markup = 1 / np.abs(blp_elast)
@@ -657,6 +702,7 @@ blp_markup_mean = np.mean(blp_markup)
 
 print(blp_elast_mean)
 print(blp_markup_mean) 
+
 
 ######################################
 # BLP MC and characteristic relation #

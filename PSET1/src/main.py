@@ -73,6 +73,20 @@ X = sm.add_constant(X) # constant + product characteristics
 X_id = df1[['market_ids', 'HMO', 'Satisfaction', 'Network']] # market id + exogenous characteristics 
 
 ######################################
+# BLP settings #
+######################################
+
+# number of markets
+M = df1['market_ids'].nunique()
+# number of draws per market
+draws = 500
+# number of product characteristics 
+K = 3
+
+# we simulate 500 agents' random coefficients for each product characteristic
+nu = np.random.standard_normal(size = (M, draws, K))
+
+######################################
 # Plain logit #
 ######################################
 
@@ -326,15 +340,7 @@ params_nested_logit.to_csv(
 ######################################
 # BLP #
 ######################################
-# number of markets
-M = df1['market_ids'].nunique()
-# number of draws per market
-draws = 500
-# number of product characteristics 
-K = 3
 
-# we simulate 500 agents' random coefficients for each product characteristic
-nu = np.random.standard_normal(size = (M, draws, K))
 
 def calc_shares(delta, sigma, X, nu): 
     # We need to loop through each market to match observed with computed shares for a candidate set of parameters
@@ -496,14 +502,6 @@ mean_logit_elast = np.mean(
     axis=0
 )
 
-######################################
-# Logit markup #
-######################################
-
-#logit_markup = np.mean(
-#    1 / (logit_alpha * P * (1 - df1["shares"]))
-#)
-
 logit_markup = 1 / mean_logit_elast
 
 ######################################
@@ -532,10 +530,6 @@ nested_logit_elast = (
 )
 
 mean_nested_logit_elast = np.mean(nested_logit_elast)
-
-######################################
-# Nested logit markup #
-######################################
 
 nested_logit_markup = 1 / mean_nested_logit_elast
 
@@ -580,17 +574,13 @@ delta_hat = pd.DataFrame(delta_hat)
 
 df1_delta = pd.concat([df1, delta_hat],  axis=1)
 
-df1_delta = df1_delta.loc[
-    df1_delta['market_ids'].isin([1, 2])
-]
-
 def calc_shares_delta(delta, sigma, X, nu, dataframe): 
     # We need to loop through each market to match observed with computed shares for a candidate set of parameters
 
     shares = []
 
     for i, m in enumerate(dataframe["market_ids"].unique()): 
-        delta_m = delta[dataframe['market_ids'] == m]
+        delta_m = delta.to_numpy()[dataframe['market_ids'].to_numpy() == m]
         delta_shaped = np.tile(delta_m, (draws, 1)).T
 
         nu_m = nu[i]
@@ -610,7 +600,6 @@ def calc_shares_delta(delta, sigma, X, nu, dataframe):
     return shares_flat
 
 
-
 def share_jac(alpha, eps):
 
     jacobian = {}
@@ -621,37 +610,38 @@ def share_jac(alpha, eps):
             df1_delta["market_ids"] == m
         ].copy()
 
-        
+        X_id_m = X_id[X_id['market_ids'] == m]
+
+        nu_m = nu[i:i+1]
 
         n_products_m = len(np.unique(dfm['product_ids']))
 
         jac_m = np.zeros((n_products_m, n_products_m))
 
         for k in range(n_products_m):
-            for j in range(n_products_m):
 
-                df1_delta['delta_plus'] = dfm["delta_hat"].copy()
-                df1_delta['delta_minus'] = dfm["delta_hat"].copy()
+                dfm['delta_plus'] = dfm["delta_hat"].copy()
+                dfm['delta_minus'] = dfm["delta_hat"].copy()
 
-                dfm['delta_plus'].loc[k] += + (eps * alpha)
-                dfm['delta_minus'].loc[k] -= + (eps * alpha) 
+                dfm.iloc[k, dfm.columns.get_loc('delta_plus')] -= eps * alpha.item()
+                dfm.iloc[k, dfm.columns.get_loc('delta_minus')] += eps * alpha.item()
 
                 shares_plus = calc_shares_delta(
                     dfm['delta_plus'], 
                     sigma_hat, 
-                    X_id, 
-                    nu, 
+                    X_id_m, 
+                    nu_m, 
                     dfm
                 )
                 shares_mins = calc_shares_delta(
                     dfm['delta_minus'], 
                     sigma_hat, 
-                    X_id, 
-                    nu, 
+                    X_id_m, 
+                    nu_m, 
                     dfm
                     )
 
-                jac_m[j, k] = (shares_plus[j] - shares_mins[j]) / (2 * eps)
+                jac_m[:, k] = (shares_plus - shares_mins) / (2 * eps)
 
         jacobian[m] = jac_m
 

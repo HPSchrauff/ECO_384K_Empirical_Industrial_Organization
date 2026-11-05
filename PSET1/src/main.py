@@ -59,6 +59,8 @@ df1['log_within_hmo_share'] = np.log(df1['within_hmo_share'])
 # Difference 
 df1['ShareDiff'] = df1['log_s'] - df1['log_os']
 
+df1['firm_ids'] = df1['product_ids']
+
 ######################################
 # Subset data #
 ######################################
@@ -573,26 +575,81 @@ sigma_hat = np.diag([
 
 delta_hat = pd.read_csv(
     OUTPUT / "delta_hat.csv"
-)["delta_hat"].to_numpy()
+)["delta_hat"]
+delta_hat = pd.DataFrame(delta_hat)
 
-def share_grad(delta, eps):
-    grad = np.zeros(len(delta))
+df1_delta = pd.concat([df1, delta_hat],  axis=1)
 
-    for j in range(len(delta)):
-        delta_plus = delta.copy()
-        delta_minus = delta.copy()
+df1_delta = df1_delta.loc[
+    df1_delta['market_ids'].isin([1, 2])
+]
 
-        delta_plus[j] -= blp_alpha * eps
-        delta_minus[j] += blp_alpha * eps
+def calc_shares_delta(delta, sigma, X, nu, dataframe): 
+    # We need to loop through each market to match observed with computed shares for a candidate set of parameters
 
-        shares_plus = calc_shares(delta_plus, sigma_hat, X_id, nu)
-        shares_mins = calc_shares(delta_minus, sigma_hat, X_id, nu)
+    shares = []
 
-        grad[j] = (shares_plus[j] - shares_mins[j]) / (2 * eps)
+    for i, m in enumerate(dataframe["market_ids"].unique()): 
+        delta_m = delta[dataframe['market_ids'] == m]
+        delta_shaped = np.tile(delta_m, (draws, 1)).T
 
-    return grad
+        nu_m = nu[i]
 
-shares_gradient = share_grad(delta_hat, eps=1e-6)
+        X_m = X[X['market_ids'] == m]
+        X_m = X_m.drop(columns=["market_ids"])
+
+        mu_m = X_m @ sigma @ nu_m.T
+    
+        f_jm = (np.exp(delta_shaped + mu_m)) / (1 + np.sum(np.exp(delta_shaped + mu_m), axis=0))
+        s_jm = np.average(f_jm, axis=1)
+
+        shares.append(s_jm)
+
+    shares_flat = np.concatenate(shares)
+    
+    return shares_flat
+
+
+
+def share_jac(alpha, eps):
+
+    jacobian = {}
+
+    df1_delta['delta_plus'] = df1_delta['delta_minus'] = dfm["delta_hat"]
+
+    for m in df1_delta['market_ids'].unique():
+
+        dfm = df1_delta[
+            df1_delta["market_ids"] == m
+        ]
+
+        nu_m = nu[m]
+
+        X_m = X_id[X_id['market_ids'] == m]
+        X_m = X_m.drop(columns=["market_ids"])
+
+        mu_m = X_m @ sigma_hat @ nu_m.T
+
+        n_products_m = len(np.unique(dfm['product_ids']))
+
+        jac_m = np.zeros((n_products_m, n_products_m))
+
+        for j in range(n_products_m):
+            for k in range(n_products_m):
+
+                dfm['delta_plus'].iloc[j] += + (eps * alpha)
+                dfm['delta_minus'].iloc[j] -= + (eps * alpha)
+
+                shares_plus = calc_shares_delta(dfm['delta_plus'], sigma_hat, X_id, nu, dfm)
+                shares_mins = calc_shares_delta(dfm['delta_minus'], sigma_hat, X_id, nu, dfm)
+
+                jac_m[j, k] = (shares_plus[k] - shares_mins[k]) / (2 * eps)
+
+        jacobian[m] = jac_m
+
+    return jacobian
+
+share_price_jac = share_jac(alpha=blp_alpha, eps=1e-6)
 
 blp_elast = shares_gradient * (P / df1["shares"])
 blp_elast_mean = np.mean(blp_elast)

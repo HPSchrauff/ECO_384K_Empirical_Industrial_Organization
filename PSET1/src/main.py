@@ -615,35 +615,43 @@ def share_jac(alpha, eps):
 
     jacobian = {}
 
-    df1_delta['delta_plus'] = df1_delta['delta_minus'] = dfm["delta_hat"]
-
-    for m in df1_delta['market_ids'].unique():
+    for i, m in enumerate(df1_delta['market_ids'].unique()):
 
         dfm = df1_delta[
             df1_delta["market_ids"] == m
-        ]
+        ].copy()
 
-        nu_m = nu[m]
-
-        X_m = X_id[X_id['market_ids'] == m]
-        X_m = X_m.drop(columns=["market_ids"])
-
-        mu_m = X_m @ sigma_hat @ nu_m.T
+        
 
         n_products_m = len(np.unique(dfm['product_ids']))
 
         jac_m = np.zeros((n_products_m, n_products_m))
 
-        for j in range(n_products_m):
-            for k in range(n_products_m):
+        for k in range(n_products_m):
+            for j in range(n_products_m):
 
-                dfm['delta_plus'].iloc[j] += + (eps * alpha)
-                dfm['delta_minus'].iloc[j] -= + (eps * alpha)
+                df1_delta['delta_plus'] = dfm["delta_hat"].copy()
+                df1_delta['delta_minus'] = dfm["delta_hat"].copy()
 
-                shares_plus = calc_shares_delta(dfm['delta_plus'], sigma_hat, X_id, nu, dfm)
-                shares_mins = calc_shares_delta(dfm['delta_minus'], sigma_hat, X_id, nu, dfm)
+                dfm['delta_plus'].loc[k] += + (eps * alpha)
+                dfm['delta_minus'].loc[k] -= + (eps * alpha) 
 
-                jac_m[j, k] = (shares_plus[k] - shares_mins[k]) / (2 * eps)
+                shares_plus = calc_shares_delta(
+                    dfm['delta_plus'], 
+                    sigma_hat, 
+                    X_id, 
+                    nu, 
+                    dfm
+                )
+                shares_mins = calc_shares_delta(
+                    dfm['delta_minus'], 
+                    sigma_hat, 
+                    X_id, 
+                    nu, 
+                    dfm
+                    )
+
+                jac_m[j, k] = (shares_plus[j] - shares_mins[j]) / (2 * eps)
 
         jacobian[m] = jac_m
 
@@ -651,7 +659,7 @@ def share_jac(alpha, eps):
 
 share_price_jac = share_jac(alpha=blp_alpha, eps=1e-6)
 
-blp_elast = shares_gradient * (P / df1["shares"])
+blp_elast = share_price_jacs * (P / df1["shares"])
 blp_elast_mean = np.mean(blp_elast)
 
 blp_markup = 1 / np.abs(blp_elast)

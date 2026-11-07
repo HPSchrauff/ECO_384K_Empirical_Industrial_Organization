@@ -17,6 +17,7 @@ from statsmodels.sandbox.regression.gmm import IV2SLS
 from statsmodels.iolib.summary2 import summary_col
 import optimagic as om
 import openpyxl
+from scipy.linalg import hadamard
 
 MAIN = Path(__file__).resolve().parents[1]
 
@@ -59,6 +60,8 @@ df1['log_within_hmo_share'] = np.log(df1['within_hmo_share'])
 # Difference 
 df1['ShareDiff'] = df1['log_s'] - df1['log_os']
 
+df1['firm_ids'] = df1['product_ids']
+
 ######################################
 # Subset data #
 ######################################
@@ -69,13 +72,30 @@ X = df1[['prices', 'HMO', 'Satisfaction', 'Network']]
 X = sm.add_constant(X) # constant + product characteristics 
 
 X_id = df1[['market_ids', 'HMO', 'Satisfaction', 'Network']] # market id + exogenous characteristics 
+X_id.insert(1, 'const', 1.0) # after talking with Tony, we need to add a random coefficient on the intercept
+######################################
+# BLP settings #
+######################################
+
+# number of markets
+M = df1['market_ids'].nunique()
+# number of draws per market
+draws = 500
+# number of product characteristics 
+K = 4
+
+# we simulate 500 agents' random coefficients for each product characteristic
+nu = np.random.standard_normal(size = (M, draws, K))
 
 ######################################
 # Plain logit #
 ######################################
 
 # Let's first assume that prices are exogenous. Then we can use standard OLS
-naive_ols = sm.OLS(Y, X).fit()
+naive_ols = sm.OLS(
+    Y, 
+    X
+).fit()
 print(naive_ols.summary())
 
 ols_table = summary_col(
@@ -154,17 +174,14 @@ hausman_instruments = sm.add_constant(
 hausman_group_instruments = pd.concat([hausman_instruments, df1[['hmo_instrument']]], axis=1)
 
 
-Z = sm.add_constant(
-    df1[[
-        "HMO",
-        "Satisfaction",
-        "Network",
-        "hausman",
-        "network_gh",
-        "satisfaction_gh",
-        "HMO_blp"
-    ]]
-)
+df1["n_products"] = df1.groupby("market_ids")["product_ids"].transform("size")
+
+Z = sm.add_constant(df1[[
+    "HMO", "Satisfaction", "Network",
+    "hausman", "network_gh", "satisfaction_gh",
+    "HMO_blp", "Satisfaction_blp", "Network_blp",
+    "n_products", "hmo_instrument",
+]])
 
 ######################################
 # Plain Logit - BLP Instruments #
@@ -321,15 +338,7 @@ params_nested_logit.to_csv(
 ######################################
 # BLP #
 ######################################
-# number of markets
-M = df1['market_ids'].nunique()
-# number of draws per market
-draws = 500
-# number of product characteristics 
-K = 3
 
-# we simulate 500 agents' random coefficients for each product characteristic
-nu = np.random.standard_normal(size = (M, draws, K))
 
 def calc_shares(delta, sigma, X, nu): 
     # We need to loop through each market to match observed with computed shares for a candidate set of parameters
@@ -378,13 +387,14 @@ def contraction_mapping(delta_init, sigma, X, nu, tol=1e-12, max_iter=1000):
 
     return delta
 
-def candidate_gmm_obj(Z, X, delta): 
+def candidate_gmm_obj(Z, X, delta, W=None): 
 
     Z = np.asarray(Z)
     X = np.asarray(X)
     delta = np.asarray(delta)
 
-    W = np.linalg.inv((Z.T @ Z) / len(df1))
+    if W is None:
+        W = np.linalg.inv((Z.T @ Z) / len(df1))
     iv_gmm = (
         np.linalg.inv(X.T @ Z @ W @ Z.T @ X) 
         @ X.T @ Z @ W @ Z.T @ delta
@@ -405,15 +415,13 @@ def objective(sigma_init):
     nu=nu
     )
 
-    return candidate_gmm_obj(Z, X, delta_hat)
+    return candidate_gmm_obj(Z, X, delta_hat, W)
 
-
-gmm = om.minimize(
-    fun=objective,
-    x0=np.array([1.0, 1.0, 1.0]),
-    algorithm="scipy_lbfgsb",
-    bounds=om.Bounds(lower=np.zeros(3)),
-    multistart=True,
+W = None
+gmm = minimize(
+    fun=objective, 
+    x0=np.array([1, 1, 1, 1]), 
+    bounds=((0, None), (0, None), (0, None), (0, None))
 )
 
 # This gives us the random coefficient sigma parameters. We can now recover the parameters on price and product characteristics
@@ -427,10 +435,6 @@ delta_hat = contraction_mapping(
     nu
 )
 
-pd.DataFrame({"delta_hat": delta_hat}).to_csv(
-    OUTPUT / "delta_hat.csv", index=False
-)
-
 W = np.linalg.inv((Z_np.T @ Z_np) / len(df1))
 
 beta_hat = (
@@ -438,7 +442,37 @@ beta_hat = (
     @ X_np.T @ Z_np @ W @ Z_np.T @ delta_hat
 )
 
+xi = np.asarray(delta_hat) - X_np @ beta_hat
+
+W = np.linalg.inv((Z_np * xi[:, None]).T @ (Z_np * xi[:, None]) / len(df1))
+
+gmm = minimize(
+    fun=objective, 
+    x0=gmm.x, 
+    bounds=((0, None), (0, None), (0, None), (0, None))
+)
+
+sigma_hat = np.diag(gmm.x)
+delta_hat = contraction_mapping(
+    df1["ShareDiff"],
+    sigma_hat,
+    X_id,
+    nu
+)
+
+beta_hat = (
+    np.linalg.inv(X_np.T @ Z_np @ W @ Z_np.T @ X_np)
+    @ X_np.T @ Z_np @ W @ Z_np.T @ delta_hat
+)
+
+pd.DataFrame({"delta_hat": delta_hat}).to_csv(
+    OUTPUT / "delta_hat.csv", index=False
+)
+
+# We need to get standard errors for this estimate. We need to calculate the gradient 
+
 print(beta_hat)
+print(sigma_hat)
 
 # Linear parameters
 alpha_blp = -beta_hat[1]
@@ -448,9 +482,10 @@ beta_satisfaction_blp = beta_hat[3]
 beta_network_blp = beta_hat[4]
 
 # Random coefficient standard deviations
-sigma_hmo_blp = sigma_hat[0, 0]
-sigma_satisfaction_blp = sigma_hat[1, 1]
-sigma_network_blp = sigma_hat[2, 2]
+sigma_intercept = sigma_hat[0, 0]
+sigma_hmo_blp = sigma_hat[1, 1]
+sigma_satisfaction_blp = sigma_hat[2, 2]
+sigma_network_blp = sigma_hat[3, 3]
 
 # Store parameters
 params_blp = pd.Series({
@@ -459,6 +494,7 @@ params_blp = pd.Series({
     "beta_hmo_blp": beta_hmo_blp,
     "beta_satisfaction_blp": beta_satisfaction_blp,
     "beta_network_blp": beta_network_blp,
+    "sigma_intercept_blp": sigma_intercept,
     "sigma_hmo_blp": sigma_hmo_blp,
     "sigma_satisfaction_blp": sigma_satisfaction_blp,
     "sigma_network_blp": sigma_network_blp
@@ -479,7 +515,7 @@ logit_params = pd.read_csv(
     OUTPUT / "params_logit.csv", header=0, names=['params', 'estimates']
 )
 
-logit_alpha = -logit_params.loc[
+logit_alpha = logit_params.loc[
     logit_params["params"] == "alpha_logit", "estimates"
 ].to_numpy()
 
@@ -493,15 +529,7 @@ mean_logit_elast = np.mean(
     axis=0
 )
 
-######################################
-# Logit markup #
-######################################
-
-#logit_markup = np.mean(
-#    1 / (logit_alpha * P * (1 - df1["shares"]))
-#)
-
-logit_markup = 1 / mean_logit_elast
+logit_markup = -1 / mean_logit_elast
 
 ######################################
 # Nested logit mean own price elasticity #
@@ -511,7 +539,7 @@ nested_logit_params = pd.read_csv(
     OUTPUT / "params_nested_logit.csv", header=0, names=['params', 'estimates']
 )
 
-nested_logit_alpha = -nested_logit_params.loc[
+nested_logit_alpha = nested_logit_params.loc[
     nested_logit_params["params"] == "alpha_nested_logit", "estimates"
 ].to_numpy()
 
@@ -530,11 +558,7 @@ nested_logit_elast = (
 
 mean_nested_logit_elast = np.mean(nested_logit_elast)
 
-######################################
-# Nested logit markup #
-######################################
-
-nested_logit_markup = 1 / mean_nested_logit_elast
+nested_logit_markup = -1 / mean_nested_logit_elast
 
 ######################################
 # BLP mean own price elasticity #
@@ -548,12 +572,16 @@ blp_alpha = blp_params.loc[
     blp_params["params"] == "alpha_blp", "estimates"
 ].to_numpy()
 
-delta_hat = pd.read_csv(
-    OUTPUT / "delta_hat.csv"
-)["delta_hat"].to_numpy()
+blp_beta_satisfaction = blp_params.loc[
+    blp_params["params"] == "beta_satisfaction_blp", "estimates"
+].to_numpy()
 
 blp_sigma_hmo = blp_params.loc[
     blp_params["params"] == "sigma_hmo_blp", "estimates"
+].to_numpy()
+
+blp_sigma_intercept = blp_params.loc[
+    blp_params["params"] == "sigma_intercept_blp", "estimates"
 ].to_numpy()
 
 blp_sigma_satisfaction = blp_params.loc[
@@ -565,35 +593,187 @@ blp_sigma_network = blp_params.loc[
 ].to_numpy()
 
 sigma_hat = np.diag([
+    blp_sigma_intercept.item(),
     blp_sigma_hmo.item(),
     blp_sigma_satisfaction.item(),
     blp_sigma_network.item()
 ])
 
-def share_grad(delta, eps):
-    grad = np.zeros(len(delta))
+delta_hat = pd.read_csv(
+    OUTPUT / "delta_hat.csv"
+)["delta_hat"]
+delta_hat = pd.DataFrame(delta_hat)
 
-    for j in range(len(delta)):
-        delta_plus = delta.copy()
-        delta_minus = delta.copy()
+df1_delta = pd.concat([df1, delta_hat],  axis=1)
 
-        delta_plus[j] -= blp_alpha * eps
-        delta_minus[j] += blp_alpha * eps
+def calc_shares_delta(delta, sigma, X, nu, dataframe): 
+    # We need to loop through each market to match observed with computed shares for a candidate set of parameters
 
-        shares_plus = calc_shares(delta_plus, sigma_hat, X_id, nu)
-        shares_mins = calc_shares(delta_minus, sigma_hat, X_id, nu)
+    shares = []
 
-        grad[j] = (shares_plus[j] - shares_mins[j]) / (2 * eps)
+    for i, m in enumerate(dataframe["market_ids"].unique()): 
+        delta_m = delta.to_numpy()[dataframe['market_ids'].to_numpy() == m]
+        delta_shaped = np.tile(delta_m, (draws, 1)).T
 
-    return grad
+        nu_m = nu[i]
 
-shares_gradient = share_grad(delta_hat, eps=1e-6)
+        X_m = X[X['market_ids'] == m]
+        X_m = X_m.drop(columns=["market_ids"])
 
-blp_elast = np.mean(shares_gradient * (P / df1["shares"]))
+        mu_m = X_m @ sigma @ nu_m.T
+    
+        f_jm = (np.exp(delta_shaped + mu_m)) / (1 + np.sum(np.exp(delta_shaped + mu_m), axis=0))
+        s_jm = np.average(f_jm, axis=1)
+
+        shares.append(s_jm)
+
+    shares_flat = np.concatenate(shares)
+    
+    return shares_flat
+
+
+def share_jac(alpha, eps):
+
+    jacobian = {}
+
+    for i, m in enumerate(df1_delta['market_ids'].unique()):
+
+        dfm = df1_delta[
+            df1_delta["market_ids"] == m
+        ].copy()
+
+        X_id_m = X_id[X_id['market_ids'] == m]
+
+        nu_m = nu[i:i+1]
+
+        n_products_m = len(np.unique(dfm['product_ids']))
+
+        jac_m = np.zeros((n_products_m, n_products_m))
+
+        for k in range(n_products_m):
+
+                dfm['delta_plus'] = dfm["delta_hat"].copy()
+                dfm['delta_minus'] = dfm["delta_hat"].copy()
+
+                dfm.iloc[k, dfm.columns.get_loc('delta_plus')] -= eps * alpha.item()
+                dfm.iloc[k, dfm.columns.get_loc('delta_minus')] += eps * alpha.item()
+
+                shares_plus = calc_shares_delta(
+                    dfm['delta_plus'], 
+                    sigma_hat, 
+                    X_id_m, 
+                    nu_m, 
+                    dfm
+                )
+                shares_mins = calc_shares_delta(
+                    dfm['delta_minus'], 
+                    sigma_hat, 
+                    X_id_m, 
+                    nu_m, 
+                    dfm
+                    )
+
+                jac_m[:, k] = (shares_plus - shares_mins) / (2 * eps)
+
+        jacobian[m] = jac_m
+
+    return jacobian
+
+share_price_jac = (share_jac(alpha=blp_alpha, eps=1e-6))
+share_price_jac_np = np.array(
+    list(share_price_jac.values()),
+    dtype=object
+)
+
+for i, m in enumerate(df1["market_ids"].unique()):
+    own_elast_m =   np.diag(np.diag(share_price_jac_np[i])) @ (
+                         (df1.loc[df1['market_ids'] == m, 'prices'].to_numpy()) 
+                         / 
+                         (df1.loc[df1['market_ids'] == m, 'shares'].to_numpy())
+                    )
+
+    df1.loc[df1['market_ids'] == m, 'own_elast_blp'] = own_elast_m
+
+mean_blp_elast = df1["own_elast_blp"].mean()
+blp_markup = (-1 / own_elast_m).mean()
+
+######################################
+# BLP MC and characteristic relation #
+######################################
+
+# Let's calculate marginal costs for products
+mc = (
+    P * (1 - (
+        -1 / (df1["own_elast_blp"])
+    ))
+)
+log_mc = np.log(mc)
+
+mc_ols = sm.OLS(
+    log_mc, 
+    X.loc[:, X.columns != 'prices']
+).fit()
+print(mc_ols.summary())
+
+######################################
+# MC with ownership matrix #
+######################################
+
+a = np.diag(np.diag(share_price_jac_np[0]))
+df1_market1 = df1.loc[df1["market_ids"] == 1, "prices"].to_numpy() + np.linalg.inv(a @ ) @ df1.loc[df1["market_ids"] == 1, "shares"].to_numpy()
+#array([1.62157622, 2.01180687, 1.59631415, 1.86083763])
+
+delta_p1 = np.multiply(-np.eye(len(np.unique(df1.loc[df1["market_ids"] == 1, "product_ids"]))), share_price_jac_np[0])
+c1 = df1.loc[df1["market_ids"] == 1, "prices"].to_numpy() - np.linalg.inv(delta_p1) @ df1.loc[df1["market_ids"] == 1, "shares"].to_numpy()
+
+
+def get_mc(ownership_matrix):
+
+    mc = []
+    delta_p = []
+
+    # We compute elasticities within each market
+    for m in df1['market_ids'].unique():
+
+        ownership_matrix_m = ownership_matrix[m]
+        share_price_jac_m = share_price_jac_np[m]
+        delta_pm = - ownership_matrix @ share_price_jac_m
+
+        c_m = df1.loc[df1["market_ids"] == m, "prices"].to_numpy() - np.linalg.inv(delta_pm) @ df1.loc[df1["market_ids"] == m, "shares"].to_numpy()
+
+        mc[m] = c_m
+        delta_p[m] = delta_pm
+
+    return mc, delta_p
+
+
+def ownership(): 
+
+H = np.array(np.eye())
+
+get_mc(H)
+
+        
+
+
+
+
+
+
+# Now, we have the Jacobian of shares wrt prices for each market. We continue to implicitly assume that each plan corresponds to a unique firm. 
+
+mc = P - np.matmul(np.linalg.inv(share_price_jac), df1["shares"])
+blp_elast_mean = np.mean(blp_elast)
+
 blp_markup = 1 / np.abs(blp_elast)
+blp_markup_mean = np.mean(blp_markup)
 
-print(blp_elast)
-print(blp_markup)
+print(blp_elast_mean)
+print(blp_markup_mean) 
 
 
+
+######################################
+# Government subsidy #
+######################################
 

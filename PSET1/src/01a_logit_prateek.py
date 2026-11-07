@@ -306,24 +306,35 @@ nested_logit_markup = np.abs(1/nested_logit_mean_elasticity)
 
 
 # BLP
-price = df_ols['prices'].to_numpy()
+
+
+## Price Elasticities (Cross + Own)
+market_ids = df_ols['market_ids'].unique() # Each unique market id
 eps = 0.001
+elas = {}
+df_ols['delta_final'] = contraction(sigma_blp, delta0)
+df_ols['start_share'] = sim_shares(sigma_blp, delta_hat)
 
-own_els = np.zeros(len(df_ols))
-delta_hat = contraction(sigma_blp, delta0)
-s_old = sim_shares(sigma_blp, delta_hat)
+mar_len = [df_ols.loc[df_ols['market_ids'] == i, ['prices', 'delta_final', 'start_share']].to_numpy()
+           for i in market_ids]
 
+start = 0
+for idx, x in enumerate(mar_len):
+     J = x.shape[0]
+     els_mar = np.zeros((J, J))
+    
+     ## Own price elasticity
+     for j in range(J):
+        delta_new = delta_hat.copy()
+        delta_new[start + j] = delta_new[start + j] + price_blp * eps * x[j, 0]
+        s_new = sim_shares(sigma_blp, delta_new)
 
-for j in range(len(df_ols)):
-     delta_new = delta_hat.copy()
-     delta_new[j] = delta_new[j] + price_blp * eps * price[j]
-     s_new = sim_shares(sigma_blp, delta_new)
-     own_els[j] = ((s_new[j] - s_old[j])/ s_old[j]) / eps
-
-
-print(own_els.mean())
-blp_markup = np.abs(1/own_els.mean())
-
+        for k in range(J):
+            els_mar[j, k] = ((s_new[start + k] - s_old[start + k])/s_old[start + k])/ eps
+        
+     elas[market_ids[idx]] = els_mar 
+     start += J
+     
 
 #####################################################################################################
 

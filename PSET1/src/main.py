@@ -174,17 +174,14 @@ hausman_instruments = sm.add_constant(
 hausman_group_instruments = pd.concat([hausman_instruments, df1[['hmo_instrument']]], axis=1)
 
 
-Z = sm.add_constant(
-    df1[[
-        "HMO",
-        "Satisfaction",
-        "Network",
-        "hausman",
-        "network_gh",
-        "satisfaction_gh",
-        "HMO_blp"
-    ]]
-)
+df1["n_products"] = df1.groupby("market_ids")["product_ids"].transform("size")
+
+Z = sm.add_constant(df1[[
+    "HMO", "Satisfaction", "Network",
+    "hausman", "network_gh", "satisfaction_gh",
+    "HMO_blp", "Satisfaction_blp", "Network_blp",
+    "n_products", "hmo_instrument",
+]])
 
 ######################################
 # Plain Logit - BLP Instruments #
@@ -475,6 +472,7 @@ pd.DataFrame({"delta_hat": delta_hat}).to_csv(
 # We need to get standard errors for this estimate. We need to calculate the gradient 
 
 print(beta_hat)
+print(sigma_hat)
 
 # Linear parameters
 alpha_blp = -beta_hat[1]
@@ -697,7 +695,7 @@ for i, m in enumerate(df1["market_ids"].unique()):
     df1.loc[df1['market_ids'] == m, 'own_elast_blp'] = own_elast_m
 
 mean_blp_elast = df1["own_elast_blp"].mean()
-blp_markup = -1 / mean_blp_elast
+blp_markup = (-1 / own_elast_m).mean()
 
 ######################################
 # BLP MC and characteristic relation #

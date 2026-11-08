@@ -334,11 +334,15 @@ for idx, x in enumerate(mar_len):
         
      elas[market_ids[idx]] = els_mar 
      start += J
-     
 
+own_el = np.concatenate([np.diag(elas[t]) for t in market_ids])
+blp_markup = np.abs(1/ own_els)
 #####################################################################################################
 
 ## Plan Characteristics and MC
 
 # BLP MC
 mc = price * (1 - blp_markup)
+
+# Regression of MC on Plan characteristics
+

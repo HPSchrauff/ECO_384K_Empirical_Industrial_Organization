@@ -18,6 +18,7 @@ from statsmodels.iolib.summary2 import summary_col
 import optimagic as om
 import openpyxl
 from scipy.linalg import hadamard
+from scipy.optimize import root
 
 MAIN = Path(__file__).resolve().parents[1]
 
@@ -179,8 +180,7 @@ df1["n_products"] = df1.groupby("market_ids")["product_ids"].transform("size")
 Z = sm.add_constant(df1[[
     "HMO", "Satisfaction", "Network",
     "hausman", "network_gh", "satisfaction_gh",
-    "HMO_blp", "Satisfaction_blp", "Network_blp",
-    "n_products", "hmo_instrument",
+    "HMO_blp", "n_products"
 ]])
 
 ######################################
@@ -218,7 +218,7 @@ tsls_model_blp = iv_blp = IV2SLS(
 print(tsls_model_blp.summary()) # we get a positive price coefficient - not good
 
 ######################################
-# Plain Logit - Gandhi Instruments #
+# Plain Logit - Hausman Instruments #
 ######################################
 
 # The standard errors are incorrect, so we will use the built-in package to compute them. 
@@ -269,7 +269,7 @@ params_logit.to_csv(OUTPUT / "params_logit.csv", header=["estimate"])
 
 # let's do naive OLS again
 X_nested = X.assign(
-    log_within_hmo_share=df1["log_within_hmo_share"]
+    rho=df1["log_within_hmo_share"]
 )
 
 # let's first naively run OLS - assuming prices are exogenous
@@ -317,7 +317,7 @@ beta_const_nested_logit = nested_logit_results.params["const"]
 beta_hmo_nested_logit = nested_logit_results.params["HMO"]
 beta_satisfaction_nested_logit = nested_logit_results.params["Satisfaction"]
 beta_network_nested_logit = nested_logit_results.params["Network"]
-rho_nested_logit = nested_logit_results.params["log_within_hmo_share"]
+rho_nested_logit = nested_logit_results.params["rho"]
 
 # Store parameters
 params_nested_logit = pd.Series({
@@ -465,6 +465,45 @@ beta_hat = (
     @ X_np.T @ Z_np @ W @ Z_np.T @ delta_hat
 )
 
+# We need the standard errors (G'WG)^-1
+def blp_cov(eps):
+
+    delta_grad_unstacked = []
+    for i in range(sigma_hat.shape[0]):
+        sigma_hat_plus = sigma_hat.copy()
+        sigma_hat_minus = sigma_hat.copy()
+        sigma_hat_plus[i, i] += eps
+        sigma_hat_minus[i, i] -= eps
+
+        delta_hat_plus = contraction_mapping(
+            df1["ShareDiff"],
+            sigma_hat_plus,
+            X_id,
+            nu
+        )
+        delta_hat_minus = contraction_mapping(
+                    df1["ShareDiff"],
+                    sigma_hat_minus,
+                    X_id,
+                    nu
+        )
+
+        delta_hat_grad = (delta_hat_plus - delta_hat_minus) / (2 * eps)
+
+        delta_grad_unstacked.append(delta_hat_grad)
+
+    delta_grad = np.column_stack(delta_grad_unstacked) 
+
+    dxi_dtheta = np.column_stack([-X_np, delta_grad])  
+
+    G = (1 / len(df1)) * (Z_np.T @ dxi_dtheta)
+
+    se = np.linalg.inv(G.T @ W @ G)
+
+    return se
+        
+se_hat = np.sqrt(np.diag(blp_cov(1e-6)) / len(df1))
+
 pd.DataFrame({"delta_hat": delta_hat}).to_csv(
     OUTPUT / "delta_hat.csv", index=False
 )
@@ -505,6 +544,32 @@ params_blp.to_csv(
     OUTPUT / "params_blp.csv",
     header=["estimate"]
 )
+
+blp_estimates = np.concatenate([beta_hat, np.diag(sigma_hat)])
+
+blp_labels = [
+    "Constant", "Price", "HMO", "Satisfaction", "Network",
+    r"$\sigma_{0}$", r"$\sigma_{HMO}$", r"$\sigma_{Sat}$", r"$\sigma_{Net}$",
+]
+
+rows = [
+    f"{lab} & {est:.3f} & ({se:.3f}) \\\\"
+    for lab, est, se in zip(blp_labels, blp_estimates, se_hat)
+]
+rows.insert(5, r"\midrule")   # separate linear parameters from sigmas
+
+latex = "\n".join([
+    r"\begin{tabular}{lcc}",
+    r"\toprule",
+    r" & Estimate & SE \\",
+    r"\midrule",
+    *rows,
+    r"\bottomrule",
+    r"\end{tabular}",
+])
+
+with open(OUTPUT / "blp.tex", "w", encoding="utf-8") as f:
+    f.write(latex)
 
 ######################################
 # Logit mean own price elasticity #
@@ -610,9 +675,10 @@ def calc_shares_delta(delta, sigma, X, nu, dataframe):
     # We need to loop through each market to match observed with computed shares for a candidate set of parameters
 
     shares = []
+    delta = np.asarray(delta)
 
     for i, m in enumerate(dataframe["market_ids"].unique()): 
-        delta_m = delta.to_numpy()[dataframe['market_ids'].to_numpy() == m]
+        delta_m = delta[dataframe['market_ids'].to_numpy() == m]
         delta_shaped = np.tile(delta_m, (draws, 1)).T
 
         nu_m = nu[i]
@@ -632,15 +698,15 @@ def calc_shares_delta(delta, sigma, X, nu, dataframe):
     return shares_flat
 
 
-def share_jac(alpha, eps):
+def share_jac(delta, alpha, eps):
 
     jacobian = {}
+    delta = np.asarray(delta)
 
     for i, m in enumerate(df1_delta['market_ids'].unique()):
 
-        dfm = df1_delta[
-            df1_delta["market_ids"] == m
-        ].copy()
+        dfm = df1[df1["market_ids"] == m].copy()
+        dfm['delta'] = delta[df1["market_ids"].to_numpy() == m]
 
         X_id_m = X_id[X_id['market_ids'] == m]
 
@@ -652,8 +718,8 @@ def share_jac(alpha, eps):
 
         for k in range(n_products_m):
 
-                dfm['delta_plus'] = dfm["delta_hat"].copy()
-                dfm['delta_minus'] = dfm["delta_hat"].copy()
+                dfm['delta_plus'] = dfm["delta"].copy()
+                dfm['delta_minus'] = dfm["delta"].copy()
 
                 dfm.iloc[k, dfm.columns.get_loc('delta_plus')] -= eps * alpha.item()
                 dfm.iloc[k, dfm.columns.get_loc('delta_minus')] += eps * alpha.item()
@@ -679,7 +745,8 @@ def share_jac(alpha, eps):
 
     return jacobian
 
-share_price_jac = (share_jac(alpha=blp_alpha, eps=1e-6))
+share_price_jac = share_jac(delta=df1_delta["delta_hat"], alpha=blp_alpha, eps=1e-6)
+
 share_price_jac_np = np.array(
     list(share_price_jac.values()),
     dtype=object
@@ -695,18 +762,27 @@ for i, m in enumerate(df1["market_ids"].unique()):
     df1.loc[df1['market_ids'] == m, 'own_elast_blp'] = own_elast_m
 
 mean_blp_elast = df1["own_elast_blp"].mean()
-blp_markup = (-1 / own_elast_m).mean()
+
+for m in df1["market_ids"].unique():
+    mask = df1["market_ids"] == m
+
+    p_m = df1.loc[mask, "prices"].to_numpy()
+    s_m = df1.loc[mask, "shares"].to_numpy()
+    jac_m = share_price_jac[m]
+
+    Delta_m = -np.eye(len(p_m)) * jac_m      
+    markup_m = np.linalg.inv(Delta_m) @ s_m
+
+    df1.loc[mask, "blp_markup"] = markup_m / p_m
+
+blp_markup = df1["blp_markup"].mean()
 
 ######################################
 # BLP MC and characteristic relation #
 ######################################
 
 # Let's calculate marginal costs for products
-mc = (
-    P * (1 - (
-        -1 / (df1["own_elast_blp"])
-    ))
-)
+mc = P * (1 - df1["blp_markup"])
 log_mc = np.log(mc)
 
 mc_ols = sm.OLS(
@@ -719,25 +795,17 @@ print(mc_ols.summary())
 # MC with ownership matrix #
 ######################################
 
-a = np.diag(np.diag(share_price_jac_np[0]))
-df1_market1 = df1.loc[df1["market_ids"] == 1, "prices"].to_numpy() + np.linalg.inv(a @ ) @ df1.loc[df1["market_ids"] == 1, "shares"].to_numpy()
-#array([1.62157622, 2.01180687, 1.59631415, 1.86083763])
-
-delta_p1 = np.multiply(-np.eye(len(np.unique(df1.loc[df1["market_ids"] == 1, "product_ids"]))), share_price_jac_np[0])
-c1 = df1.loc[df1["market_ids"] == 1, "prices"].to_numpy() - np.linalg.inv(delta_p1) @ df1.loc[df1["market_ids"] == 1, "shares"].to_numpy()
-
-
 def get_mc(ownership_matrix):
 
-    mc = []
-    delta_p = []
+    mc = {}
+    delta_p = {}
 
-    # We compute elasticities within each market
+    # We compute marginal costs within each market
     for m in df1['market_ids'].unique():
 
         ownership_matrix_m = ownership_matrix[m]
-        share_price_jac_m = share_price_jac_np[m]
-        delta_pm = - ownership_matrix @ share_price_jac_m
+        share_price_jac_m = share_price_jac[m]
+        delta_pm = - np.multiply(ownership_matrix_m, share_price_jac_m)
 
         c_m = df1.loc[df1["market_ids"] == m, "prices"].to_numpy() - np.linalg.inv(delta_pm) @ df1.loc[df1["market_ids"] == m, "shares"].to_numpy()
 
@@ -747,33 +815,97 @@ def get_mc(ownership_matrix):
     return mc, delta_p
 
 
-def ownership(): 
+def ownership(mergers=None):
 
-H = np.array(np.eye())
+    # mergers maps product_ids to new firm_ids, e.g. {2: 1} means firm 1 acquires product 2
+    if mergers is None:
+        mergers = {}
 
-get_mc(H)
+    ownership_matrix = {}
 
-        
+    for m in df1['market_ids'].unique():
 
+        firms_m = df1.loc[df1["market_ids"] == m, "product_ids"].map(
+            lambda j: mergers.get(j, df1.loc[df1["product_ids"] == j, "firm_ids"].iloc[0])
+        ).to_numpy()
 
+        # O_jk = 1 if products j and k are owned by the same firm
+        ownership_matrix[m] = (firms_m[:, None] == firms_m[None, :]).astype(float)
 
+    return ownership_matrix 
 
-
-
-# Now, we have the Jacobian of shares wrt prices for each market. We continue to implicitly assume that each plan corresponds to a unique firm. 
-
-mc = P - np.matmul(np.linalg.inv(share_price_jac), df1["shares"])
-blp_elast_mean = np.mean(blp_elast)
-
-blp_markup = 1 / np.abs(blp_elast)
-blp_markup_mean = np.mean(blp_markup)
-
-print(blp_elast_mean)
-print(blp_markup_mean) 
-
-
+H = ownership()
+mc, delta_p = get_mc(H)
 
 ######################################
-# Government subsidy #
+# New price from subsidy #
 ######################################
 
+def foc_residual(p, subsidy, ownership_matrix, mc_flat, p_obs, delta_hat):
+
+    # Consumers pay p - subsidy, which shifts mean utility
+    delta_p = delta_hat - blp_alpha.item() * (p - subsidy - p_obs)
+
+    shares_p = calc_shares_delta(delta_p, sigma_hat, X_id, nu, df1)
+    jac_p = share_jac(delta=delta_p, alpha=blp_alpha, eps=1e-6)
+
+    # We compute FOC residuals within each market
+    residuals = []
+
+    for m in df1['market_ids'].unique():
+
+        delta_pm = - np.multiply(ownership_matrix[m], jac_p[m])
+        p_m = p[df1["market_ids"].to_numpy() == m]
+        c_m = mc_flat[df1["market_ids"].to_numpy() == m]
+        s_m = shares_p[df1["market_ids"].to_numpy() == m]
+
+        residuals.append(delta_pm @ (p_m - c_m) - s_m)
+
+    return np.concatenate(residuals)
+
+
+def price_solver(subsidy, ownership_matrix, mc):
+
+    p_obs = df1["prices"].to_numpy()
+    delta_hat = df1_delta["delta_hat"].to_numpy()
+    mc_flat = np.concatenate([mc[m] for m in df1['market_ids'].unique()])
+
+    sol = root(
+        fun=foc_residual,
+        x0=p_obs,
+        args=(subsidy, ownership_matrix, mc_flat, p_obs, delta_hat),
+        method="hybr"
+    )
+
+    print(sol.message)
+
+    p = sol.x
+    delta_p = delta_hat - blp_alpha.item() * (p - subsidy - p_obs)
+    shares_p = calc_shares_delta(delta_p, sigma_hat, X_id, nu, df1)
+
+    return p, shares_p
+
+
+mc, delta_p = get_mc(ownership())
+p_subsidy, shares_subsidy = price_solver(subsidy=0.25, ownership_matrix=ownership(), mc=mc)
+
+df1["prices_subsidy"] = p_subsidy
+df1["shares_subsidy"] = shares_subsidy
+df1['outside_share_subsidy'] = 1 - df1.groupby(["market_ids"])['shares_subsidy'].transform("sum")
+
+df1[['prices', 'prices_subsidy', 'shares', 'shares_subsidy', 'Outside_Share', 'outside_share_subsidy']].describe()
+
+mc_flat = np.concatenate([mc[m] for m in df1['market_ids'].unique()])
+
+profit_per_enrollee = p_subsidy - mc_flat
+
+df1.to_csv(OUTPUT / "df1_subsidy.csv", index=False)
+
+######################################
+# New price from merger #
+######################################
+
+df1 = pd.read_csv(OUTPUT / "df1_subsidy.csv")
+
+mc, delta_p = get_mc(ownership({2: 4}))
+p_subsidy, shares_subsidy = price_solver(subsidy=0, ownership_matrix=ownership({2, 4}), mc=mc)

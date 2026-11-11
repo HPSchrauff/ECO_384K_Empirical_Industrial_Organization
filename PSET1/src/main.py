@@ -19,6 +19,7 @@ import optimagic as om
 import openpyxl
 from scipy.linalg import hadamard
 from scipy.optimize import root
+from scipy.stats import norm
 
 MAIN = Path(__file__).resolve().parents[1]
 
@@ -180,7 +181,8 @@ df1["n_products"] = df1.groupby("market_ids")["product_ids"].transform("size")
 Z = sm.add_constant(df1[[
     "HMO", "Satisfaction", "Network",
     "hausman", "network_gh", "satisfaction_gh",
-    "HMO_blp", "n_products"
+    "HMO_blp", "Satisfaction_blp", "Network_blp",
+    "hmo_instrument", "n_products"
 ]])
 
 ######################################
@@ -545,26 +547,32 @@ params_blp.to_csv(
     header=["estimate"]
 )
 
-blp_estimates = np.concatenate([beta_hat, np.diag(sigma_hat)])
+blp_estimates = np.concatenate([np.ravel(beta_hat), np.diag(sigma_hat)])
+se = np.ravel(se_hat)
+pvals = 2 * norm.sf(np.abs(blp_estimates / se))
+
+def stars(p):
+    return "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.10 else ""
 
 blp_labels = [
     "Constant", "Price", "HMO", "Satisfaction", "Network",
     r"$\sigma_{0}$", r"$\sigma_{HMO}$", r"$\sigma_{Sat}$", r"$\sigma_{Net}$",
 ]
 
-rows = [
-    f"{lab} & {est:.3f} & ({se:.3f}) \\\\"
-    for lab, est, se in zip(blp_labels, blp_estimates, se_hat)
-]
-rows.insert(5, r"\midrule")   # separate linear parameters from sigmas
+rows = []
+for i, (lab, est, s, p) in enumerate(zip(blp_labels, blp_estimates, se, pvals)):
+    if i == 5:
+        rows.append(r"\hline")  # separate linear parameters from sigmas
+    rows.append(f"{lab} & {est:.3f}{stars(p)} \\\\")
+    rows.append(f" & ({s:.3f}) \\\\")
 
 latex = "\n".join([
-    r"\begin{tabular}{lcc}",
-    r"\toprule",
-    r" & Estimate & SE \\",
-    r"\midrule",
+    r"\begin{tabular}{ll}",
+    r"\hline",
+    r" & BLP \\",
+    r"\hline",
     *rows,
-    r"\bottomrule",
+    r"\hline",
     r"\end{tabular}",
 ])
 

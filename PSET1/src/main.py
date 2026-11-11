@@ -799,6 +799,20 @@ mc_ols = sm.OLS(
 ).fit()
 print(mc_ols.summary())
 
+mc_table = summary_col(
+    [mc_ols],
+    model_names=["log(MC)"],
+    stars=True,
+    float_format="%.3f"
+)
+
+latex = mc_table.as_latex()
+latex = latex.split(r"\begin{tabular}")[1].split(r"\end{tabular}")[0]
+latex = r"\begin{tabular}" + latex + r"\end{tabular}"
+
+with open(OUTPUT / "mc_ols.tex", "w", encoding="utf-8") as f:
+    f.write(latex)
+
 ######################################
 # MC with ownership matrix #
 ######################################
@@ -852,7 +866,7 @@ mc, delta_p = get_mc(H)
 def foc_residual(p, subsidy, ownership_matrix, mc_flat, p_obs, delta_hat):
 
     # Consumers pay p - subsidy, which shifts mean utility
-    delta_p = delta_hat - blp_alpha.item() * (p - subsidy - p_obs)
+    delta_p = delta_hat - blp_alpha.item() * (p - p_obs)
 
     shares_p = calc_shares_delta(delta_p, sigma_hat, X_id, nu, df1)
     jac_p = share_jac(delta=delta_p, alpha=blp_alpha, eps=1e-6)
@@ -867,7 +881,7 @@ def foc_residual(p, subsidy, ownership_matrix, mc_flat, p_obs, delta_hat):
         c_m = mc_flat[df1["market_ids"].to_numpy() == m]
         s_m = shares_p[df1["market_ids"].to_numpy() == m]
 
-        residuals.append(delta_pm @ (p_m - c_m) - s_m)
+        residuals.append(delta_pm @ (p_m + subsidy - c_m) - s_m)
 
     return np.concatenate(residuals)
 
@@ -903,9 +917,36 @@ df1['outside_share_subsidy'] = 1 - df1.groupby(["market_ids"])['shares_subsidy']
 
 df1[['prices', 'prices_subsidy', 'shares', 'shares_subsidy', 'Outside_Share', 'outside_share_subsidy']].describe()
 
-mc_flat = np.concatenate([mc[m] for m in df1['market_ids'].unique()])
+summary_vars = {
+    "prices": "Premium (baseline)",
+    "prices_subsidy": "Premium (subsidy)",
+    "shares": "Share (baseline)",
+    "shares_subsidy": "Share (subsidy)",
+    "Outside_Share": "Outside share (baseline)",
+    "outside_share_subsidy": "Outside share (subsidy)",
+}
 
-profit_per_enrollee = p_subsidy - mc_flat
+stats = df1[list(summary_vars)].describe().T
+stats = stats[["mean", "std", "min", "25%", "50%", "75%", "max"]]
+stats.index = [summary_vars[v] for v in stats.index]
+
+rows = [
+    f"{lab} & " + " & ".join(f"{r[c]:.3f}" for c in stats.columns) + r" \\"
+    for lab, r in stats.iterrows()
+]
+
+latex = "\n".join([
+    r"\begin{tabular}{lccccccc}",
+    r"\hline",
+    r" & Mean & SD & Min & P25 & Median & P75 & Max \\",
+    r"\hline",
+    *rows,
+    r"\hline",
+    r"\end{tabular}",
+])
+
+with open(OUTPUT / "subsidy_summary.tex", "w", encoding="utf-8") as f:
+    f.write(latex)
 
 df1.to_csv(OUTPUT / "df1_subsidy.csv", index=False)
 
@@ -913,7 +954,17 @@ df1.to_csv(OUTPUT / "df1_subsidy.csv", index=False)
 # New price from merger #
 ######################################
 
-df1 = pd.read_csv(OUTPUT / "df1_subsidy.csv")
+df2 = pd.read_csv(OUTPUT / "df1_subsidy.csv")
 
-mc, delta_p = get_mc(ownership({2: 4}))
-p_subsidy, shares_subsidy = price_solver(subsidy=0, ownership_matrix=ownership({2, 4}), mc=mc)
+H_pre  = ownership()
+H_post = ownership({2: 4})
+
+mc_pre, delta_p = get_mc(H_pre)          
+p_merger, shares_merger = price_solver(subsidy=0, ownership_matrix=H_post, mc=mc_pre)
+
+df2["prices_merger"] = p_merger
+df2["shares_merger"] = shares_merger
+
+df2['outside_share_merger'] = 1 - df2.groupby(["market_ids"])['shares_merger'].transform("sum")
+
+df2[['prices', 'prices_merger', 'shares', 'shares_merger', 'Outside_Share', 'outside_share_merger']].describe()

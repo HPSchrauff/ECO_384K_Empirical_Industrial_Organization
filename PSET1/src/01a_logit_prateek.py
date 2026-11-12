@@ -166,8 +166,9 @@ sigma_nested_logit = coefficients_nested_logit['lg_cond_share']
 np.random.seed(5)
 
 market_ids = df_ols['market_ids'].unique() # Each unique market id
-markets, draws, char = len(market_ids), 500, 3
-nu_draws = np.random.randn(markets, draws, char) # 75 markets, 500 draws, 3 characteristics
+markets, draws, char = len(market_ids), 500, 4
+nu_draws = np.random.randn(markets, draws, char) 
+# 75 markets, 500 draws, 3 characteristics, plus 1 random coefficient for the intercept
 
 
 S_obs = df_ols['shares'].to_numpy() # Observed Shares
@@ -190,14 +191,16 @@ def gh_instruments(var):
 df_ols['Network_quad'] = gh_instruments('Network')
 df_ols['Satisfaction_quad'] = gh_instruments('Satisfaction')     
 df_ols['const'] = 1.0
+df_ols['n_products'] = df_ols.groupby('market_ids')['market_ids'].transform('size')
 
 ## GMM Estiimation Elements
-z = ['const', 'HMO', 'Satisfaction', 'Network', 'hausman_instrument', 'HMO_instrument', 'Satisfaction_quad', 'Network_quad']
+z = ['const', 'HMO', 'Satisfaction', 'Network', 'n_products', 'hausman_instrument', 'n_prod_market',
+     'HMO_instrument', 'Satisfaction_quad', 'Network_quad', 'Network_instrument', 'Satisfaction_instrument']
 Z = df_ols[z].to_numpy()
-N = len(df_ols)
+N = len(df_ols) 
 W = np.linalg.inv(Z.T @ Z / N)
 
-x_list = [df_ols.loc[df_ols['market_ids'] == i, ['HMO', 'Satisfaction', 'Network']].to_numpy()
+x_list = [df_ols.loc[df_ols['market_ids'] == i, ['const', 'HMO', 'Satisfaction', 'Network']].to_numpy()
           for i in market_ids]  
 
 def sim_shares(sigma, delta):
@@ -240,8 +243,8 @@ last = {}
 def gmm(sigma):
      df_ols['delta_calc'] = contraction(sigma, delta0)
      
-     iv2sls = IV2SLS.from_formula('delta_calc ~ 1 + HMO + Satisfaction + Network + [prices ~ hausman_instrument + ' \
-    'HMO_instrument + Satisfaction_quad + Network_quad]', data =df_ols).fit(cov_type='robust')
+     iv2sls = IV2SLS.from_formula('delta_calc ~ 1 + HMO + Satisfaction + Network + [prices ~ n_products + ' \
+     'hausman_instrument + HMO_instrument + Satisfaction_quad + Network_quad]', data =df_ols).fit(cov_type='robust')
      
      last['iv'] = iv2sls
 
@@ -258,9 +261,9 @@ def objective(free_sigma):
 
 # First, time a single call
 t0 = time.time()
-print(objective([1, 1, 1]), time.time() - t0, "seconds")
+print(objective([1, 1, 1, 1]), time.time() - t0, "seconds")
 
-result = minimize(objective, x0=np.array([1, 1, 1]), method='Nelder-Mead',
+result = minimize(objective, x0=np.array([1, 1, 1, 1]), method='Nelder-Mead',
                   options={'xatol': 1e-4, 'fatol': 1e-12, 'maxiter': 200})
 
 gmm(result.x)                                        # leaves the 2SLS result in last['iv']
@@ -310,10 +313,10 @@ nested_logit_markup = np.abs(1/nested_logit_mean_elasticity)
 
 ## Price Elasticities (Cross + Own)
 market_ids = df_ols['market_ids'].unique() # Each unique market id
+delta_hat = df_ols['delta_calc'].to_numpy()
 eps = 0.001
 elas = {}
-df_ols['delta_final'] = contraction(sigma_blp, delta0)
-df_ols['start_share'] = sim_shares(sigma_blp, delta_hat)
+s_old = sim_shares(sigma_blp, delta_hat)
 
 mar_len = [df_ols.loc[df_ols['market_ids'] == i, ['prices', 'delta_final', 'start_share']].to_numpy()
            for i in market_ids]
@@ -336,7 +339,8 @@ for idx, x in enumerate(mar_len):
      start += J
 
 own_el = np.concatenate([np.diag(elas[t]) for t in market_ids])
-blp_markup = np.abs(1/ own_els)
+blp_markup = np.abs(1/ own_el)
+
 #####################################################################################################
 
 ## Plan Characteristics and MC

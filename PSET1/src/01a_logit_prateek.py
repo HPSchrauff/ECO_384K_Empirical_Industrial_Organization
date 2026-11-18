@@ -346,7 +346,70 @@ blp_markup = np.abs(1/ own_el)
 ## Plan Characteristics and MC
 
 # BLP MC
-mc = price * (1 - blp_markup)
+price = df_ols['prices']
+df_ols['mc'] = np.log(price - (1 - blp_markup)) # Comes from firm's FOC conditions
+X = df_ols[['const', 'HMO', 'Network', 'Satisfaction']]
+y = df_ols['mc']
 
 # Regression of MC on Plan characteristics
+mc_plan_char = sm.OLS(y, X).fit()
+print(mc_plan_char.summary())
+
+
+######################################################################################################
+
+## Subsidy $250
+
+def shares_deriv(sigma, delta, price_coeff):
+    s_hat = []
+    der_s = []
+    start = 0
+    # idx goes from 0-74 and t goes from 1-75 (Actual market ids) 
+    for idx, x in enumerate(x_list):
+        # For market i, get the product characterstics
+        J = x.shape[0] # No of products in each market
+
+        # Mu for each consumer across each product in market i
+        mu = x @ (sigma[:, None] * nu_draws[idx].T)
+
+        # Delta
+        d = delta[start: start + J] # Uses number of products in each market to get the initial value of delta
+        start += J # Start at next market in next loop
+
+        # Simulates shares
+        util = d[:, None] + mu
+        num = np.exp(util)
+        denom = 1 + num.sum(axis = 0, keepdims = True)
+
+        prob = num/denom
+        s_hat.append(prob.mean(axis = 1))
+        der_s.append(price_coeff* (prob*(1-prob)).mean(axis = 1)) # Analytical derivative
+
+
+    return np.concatenate(s_hat), np.concatenate(der_s) 
+
+
+subsidy = 0.25
+price = df_ols['prices'].to_numpy()
+p0 = price.copy()
+
+mc_num = price - (1 - blp_markup)
+
+for i in range(1000):
+     delta = delta_hat + price_blp * (p0 - price)
+     s, ds = shares_deriv(sigma_blp, delta, price_blp)
+     p_new = mc - subsidy - s/ds
+     if np.max(np.abs(p_new - p0)) < 1e-10:
+          p0 = p_new
+          break
+     p0 = p_new
+
+
+
+delta_subsidy = delta_hat + price_blp * (p0 - price)
+df_ols['share_subsidy'], _ = shares_deriv(sigma_blp, delta_subsidy, price_blp)
+
+df_ols['Total Share Subsidy'] = df_ols.groupby('market_ids')['share_subsidy'].transform('sum')
+df_ols['Outside_Subsidy'] = 1 - df_ols['Total Share Subsidy']
+
 
